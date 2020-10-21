@@ -1,0 +1,1003 @@
+---
+title: "Clustered TSP"
+output: html_notebook
+---
+Packages that we use:
+```{r}
+library(readxl) # export and import excel files
+library(sp) # To get the Great Circle distance for our data 
+library(cluster) #CLustering methods: PAM, FPAM
+library(kmed) # Clustering methods: Simple and fast k-medoid algorithm, Rank k-Medoid, increasing number of clusters in k-medoids algorithm
+library(leaflet) # For the visual representation on a map
+library(TSP) # TSP heuristics
+library(tictoc) # measure how long a step takes
+library(rio) # for export
+library(plyr) # for GSM
+library(ggplot2) # for GSM
+```
+
+Notation: 
+X - longitude, and latitude of our data points
+D - distance martix
+TD - total distance of the clustering for k clusters
+k - number of clusters
+
+Distance matrix calculation
+```{r}
+# Read in the data
+data <- read_excel("rawdataclear.xls", na="NA") 
+lon = data$LONGITUDE
+lat = data$LATITUDE
+X = cbind(lon, lat) # Our data points longitude and latitude 
+# We calculate the distance matrix D with the Great Circle Distance.
+D=spDists(X, y = X, longlat = TRUE) 
+n=as.numeric(length(lon))
+k_max=20
+k_min=2
+k_range=c(k_min:k_max)
+B=500 # for GSM Number of samples
+rep=1000 # Repetitions for RKM in GSM
+```
+
+Data points on a map
+```{r}
+m <- leaflet() %>%
+  addTiles() %>%  
+  addMarkers(lon, lat)
+m  # Print the map
+```
+
+Calculation of the total distance TD as a function 
+```{r}
+#Total distance function 
+TD <- function(distancematrix, cluster, medoiden){
+  n <- length(cluster); k <- length(medoiden); td <- rep(0, times=k); 
+  nk <- rep(0, times=k);
+  for (j in 1:k){
+    for (i in 1:n){
+        if (cluster[i] == j){
+        td[j] = td[j]+distancematrix[i,medoiden[j]] # calculate TD for every cluster
+        nk[j]=nk[j]+1
+      }
+    }
+  }
+  TD <- 0
+  for (i in 1:k){
+     TD = TD+td[i] #summing up all cluster distances
+  }  
+  return(TD)
+}
+```
+
+Elbow method (EM) 
+```{r}
+# the function for the EM needs the TD for all possible cluster sizes and the maximal size of clusters k as input; we expect cluster numbers from two to k
+EM <- function(td, k){
+  d <- rep(0, times=k)
+  for (i in k_min:(k-1)){d[i] = (atan(1/(td[i]-td[i+1])))} # total distance difference get the ratio between the difference and the factor 1
+  for (i in 1:k){if (d[i]<0){d[i]=180+d[i]}} #just for RKM if the angles get negative
+  p <- rep(0, times=k)
+  for (i in k_min:(k-2)){p[i]=d[i]+180-d[i+1]} # standard case d is betta
+  t=0
+  if (d[2]>90){p[1]=90+180-d[2]} else {p[1]=360}
+  for (i in 1:(k-1)){if (p[i]<p[i+1]){t=i+1; break()}}
+  return(t)
+}
+```
+
+Application of EM on our data set for the cluster sizes between 2 and 20
+```{r}
+# PAM
+TD_PAM <- rep(0, times=k_max)
+for (k in k_range){
+  PAM_Res <- pam(D, k, diss=TRUE) # PAM clustering 
+  TD_PAM[k]=TD(D, PAM_Res$clustering, PAM_Res$id.med)
+}
+k_opt_PAM=EM(TD_PAM,k) # optimal k (k_opt)
+
+
+# FPAM
+TD_FPAM <- rep(0, times=k_max)
+for (k in k_range){
+  pam.res <- pam(D, k, diss=TRUE, pamonce = 5)
+  TD_FPAM[k]=TD(D, pam.res$clustering, pam.res$id.med)
+}
+k_opt_FPAM=EM(TD_FPAM,k)
+
+
+# fast k-Medoid
+fkm <- fastkmed(D, ncluster = k, iterate = 200) 
+TD_FKM <- rep(0, times=k_max)
+for (k in k_range){
+  fkm <- fastkmed(D, ncluster = k, iterate = 200)
+  TD_FKM[k]=TD(D, fkm$cluster, fkm$medoid)
+}
+k_opt_FKM=EM(TD_FKM,k)
+
+
+# rank k-Medoid dependent on initial points and m
+TD_RKM <- rep(0, times=k_max)
+for (k in k_range){
+  rkm <- rankkmed(D, ncluster = k, m = 5, iterate = 50)
+  TD_RKM[k]=TD(D, rkm$cluster, rkm$medoid)
+}
+k_opt_RKM=EM(TD_RKM,k)
+
+
+# IKM_1.1
+inckm <- inckmed(D, ncluster = k, alpha = 1.1, iterate = 200)
+TD_IKM_1.1 <- rep(0, times=k_max)
+for (k in k_range){
+  inckm <- inckmed(D, ncluster = k, alpha = 1.1, iterate = 200)
+  TD_IKM_1.1[k]=TD(D, inckm$cluster, inckm$medoid)
+}
+k_opt_IKM_1.1=EM(TD_IKM_1.1,k)
+
+
+# IKM_1.5
+inckm <- inckmed(D, ncluster = k, alpha = 1.5, iterate = 200)
+TD_IKM_1.5 <- rep(0, times=k_max)
+for (k in k_range){
+  inckm <- inckmed(D, ncluster = k, alpha = 1.5, iterate = 200)
+  TD_IKM_1.5[k]=TD(D, inckm$cluster, inckm$medoid)
+}
+k_opt_IKM_1.5=EM(TD_IKM_1.5,k)
+
+
+# EM: Figure with all methods
+plot(k_min:k_max, TD_PAM[k_min:k_max], type = 'l',
+     lwd=2,
+     col="#666666",
+     xlab='Number of clusters', 
+     ylab='Total distance (kms)', 
+     xlim=c( k_min, k_max),
+     ylim=c( 0, 1100))
+axis(1, at=k_range,labels=k_range, las=0)
+lines(x=k_range,
+      y=TD_FPAM[k_range],
+      lwd=2,
+      col="#E7298A",
+      lty="twodash")
+lines(x=k_range,
+      y=TD_FKM[k_range], 
+      lwd=2,
+      col="#7570B3",
+      lty="dotdash")
+lines(x=k_range,
+      y=TD_IKM_1.1[k_range],
+      lwd=2,
+      col = "#D95F02",
+      lty="8481")
+lines(x=k_range,
+      y=TD_IKM_1.5[k_range],
+      lwd=2,
+      col="#1B9E77",
+      lty="dashed")
+legend("topright", legend=c("PAM","FPAM","FKM", "IKM_1.1","IKM_1.5"),
+       col=c("#666666", "#E7298A", "#7570B3", "#D95F02", "#1B9E77"), 
+       lty=c("solid","twodash","dotdash", "8481","dashed"), cex=0.8)
+symbols(x=c(k_opt_PAM, k_opt_FPAM, k_opt_FKM, k_opt_IKM_1.1, k_opt_IKM_1.5), y=c(TD_PAM[k_opt_PAM], TD_FPAM[k_opt_FPAM], TD_FKM[k_opt_FKM], TD_IKM_1.1[k_opt_IKM_1.1], TD_IKM_1.5[k_opt_IKM_1.5]), circles=rep(1,5), add=T, inches=0.07, lwd=2)
+```
+
+Average silhouette method for the different clustering methods
+```{r}
+# use the pre-implemented version from the package cluster
+# silhouette coefficient for Pam
+# PAM
+si <- 0
+max <- 0
+for (k in k_range) {
+  pam.res <- pam(D, k, diss=TRUE)
+  sum=summary(silhouette(pam.res$clustering, dmatrix = D,))
+  si[k]=sum$avg.width
+}
+Sil_PAM <- si
+max_PAM <- which.max(si)
+
+# FPAM
+si <- 0
+max <- 0
+for (k in k_range) {
+  fastpam.res <- pam(D, k, diss=TRUE, pamonce = 5)
+  sum=summary(silhouette(fastpam.res$clustering, dmatrix = D,))
+  si[k]=sum$avg.width
+}
+Sil_FPAM <- si
+max_FPAM <- which.max(si)
+
+# FKM
+si <- 0
+max <- 0
+for (k in k_range) {
+  fkm <- fastkmed(D, ncluster = k, iterate = 200)
+  sum=summary(silhouette(fkm$cluster, dmatrix = D,))
+  si[k]=sum$avg.width
+}
+max_FKM <- which.max(si)
+Sil_FKM <- si
+
+
+# RKM dependent on initial points and m
+si <- 0
+max <- 0
+for (k in k_range) {
+  rkm <- rankkmed(D, ncluster = k, m = 5, iterate = 50)
+  sum=summary(silhouette(rkm$cluster, dmatrix = D,))
+  si[k]=sum$avg.width
+}
+max_RKM <- which.max(si)
+Sil_RKM <- si
+
+
+# IKM_1.1
+si <- 0
+max <- 0
+td <- 0
+for (k in k_range) {
+  inkm <- inckmed(D, ncluster = k, alpha = 1.1, iterate = 200)
+  td[k]=inkm$minimum_distance
+  sum=summary(silhouette(inkm$cluster, dmatrix = D,))
+  si[k]=sum$avg.width
+}
+max_IKM_1.1 <- which.max(si)
+Sil_IKM_1.1 <- si
+
+
+# IKM_1.5
+
+si <- 0
+max <- 0
+for (k in k_range) {
+  inkm <- inckmed(D, ncluster = k, alpha = 1.5, iterate = 200)
+  td[k]=inkm$minimum_distance
+  sum=summary(silhouette(inkm$cluster, dmatrix = D,))
+  si[k]=sum$avg.width
+}
+max_IKM_1.5 <- which.max(si)
+Sil_IKM_1.5 <- si
+
+
+plot(k_min:k_max, Sil_PAM[k_min:k_max], type = 'l',
+     lwd=2,
+     col="#666666",
+     xlab='Number of clusters', 
+     # ylab='Silhouette width s', 
+     ylab='Average silhouette value', 
+     xlim=c(k_min, k_max),
+     ylim=c( 0, 1))
+axis(1, at=k_range,labels=k_range, las=0)
+lines(x=c(k_range), 
+      y=Sil_FPAM[k_range], 
+      lwd=2,
+      col="#E7298A",
+      lty="twodash")
+lines(x=c(k_range), 
+      y=Sil_FKM[k_range], 
+      lwd=2, 
+      col="#7570B3",
+      lty="dotdash")
+lines(x=c(k_range), 
+      y=Sil_IKM_1.1[k_range], 
+      lwd=2, 
+      col = "#D95F02",
+      lty="8481")
+lines(x=c(k_range), 
+      y=Sil_IKM_1.5[k_range], 
+      lwd=2, 
+      col="#1B9E77",
+      lty="dashed")
+legend("topright", legend=c("PAM","FPAM","FKM", "IKM_1.1","IKM_1.5"),
+       col=c("#666666", "#E7298A", "#7570B3", "#D95F02", "#1B9E77"), 
+       lty=c("solid","twodash","dotdash", "8481","dashed"), cex=0.8)
+symbols(x=c(max_PAM, max_FPAM, max_FKM, max_IKM_1.1, max_IKM_1.5), y=c(Sil_PAM[max_PAM], Sil_FPAM[max_FPAM], Sil_FKM[max_FKM], Sil_IKM_1.1[max_IKM_1.1], Sil_IKM_1.5[max_IKM_1.5]), circles=rep(1,5), add=T, inches=0.07, lwd=2)
+```
+
+
+GAP statistic slightly modified but other than that directly taken from https://github.com/echen/gap-statistic/blob/master/gap-statistic.R
+```{r}
+B=500
+
+#https://github.com/echen/gap-statistic/blob/master/gap-statistic.R
+# Given a matrix `data`, where rows are observations and columns are individual dimensions, compute and plot the gap statistic (according to a uniform reference distribution).
+
+gap_statistic = function(data, min_num_clusters = 2, max_num_clusters = 20, num_reference_bootstraps = 500) {
+  num_clusters = min_num_clusters:max_num_clusters
+  actual_dispersions = maply(num_clusters, function(n) dispersion(data, n))
+  ref_dispersions = maply(num_clusters, function(n) reference_dispersion(data, n, num_reference_bootstraps))
+  mean_ref_dispersions = ref_dispersions[ , 1]
+  stddev_ref_dispersions = ref_dispersions[ , 2]
+  gaps = mean_ref_dispersions - actual_dispersions
+  
+  print(plot_gap_statistic(gaps, stddev_ref_dispersions, num_clusters))
+  
+#  print(paste("The estimated number of clusters is ", num_clusters[which.max(gaps)], ".", sep = "")) # not the definition of the estimation number
+  gap_s=c()
+  for (i in 1: max_num_clusters-(min_num_clusters)){
+    gap_s[i]=gaps[i]-gaps[i+1]+stddev_ref_dispersions[i+1]
+  }
+  gap_opt=1
+  i=1
+  while((gaps[i]-gaps[i+1]+stddev_ref_dispersions[i+1])<0 && i<(max_num_clusters-(1+min_num_clusters))) {
+    i=i+1
+    gap_opt=i
+  }
+  if (gap_opt==max_num_clusters-(1+min_num_clusters)){
+    gap_opt=None
+  }
+  print(paste("The estimated number of clusters is ", num_clusters[gap_opt] ,".", sep = ""))
+  
+  list(gap_opt=gap_opt, gap_s=gap_s, gaps = gaps, gap_stddevs = stddev_ref_dispersions)
+}
+
+# Generate uniform points within the range of `data` Here GPS
+generate_uniform_points = function(data) {
+  # Find the min/max values in each dimension, so that we can generate uniform numbers in these ranges.
+  mins = aaply(data, 2, min)
+  maxs = apply(data, 2, max)
+  
+  num_datapoints = nrow(data)
+  # For each dimension, generate `num_datapoints` points uniformly in the min/max range.
+  uniform_pts = maply(1:length(mins), function(dim) runif(num_datapoints, min = mins[dim], max = maxs[dim]))
+  uniform_pts = t(uniform_pts)
+  uniform_pts = as.matrix.data.frame(uniform_pts)
+}
+
+# Calculate log(sum_i(within-cluster_i sum of squares around cluster_i mean)).
+dispersion = function(data, num_clusters) {
+  data=spDists(data, y = data, longlat = TRUE)
+  # R's k-means algorithm doesn't work when there is only one cluster.
+  if (num_clusters == 1) {
+    cluster_mean = aaply(data, 2, mean)
+    distances_from_mean = aaply((data - cluster_mean)^2, 1, sum)
+    log(sum(distances_from_mean))
+  } else {	
+    # Run the k-means algorithm `nstart` times. Each run uses at most `iter.max` iterations.
+    #k = kmeans(data, centers = num_clusters, nstart = 10, iter.max = 50)
+    # Take the sum, over each cluster, of the within-cluster sum of squares around the cluster mean. Then take the log. This is `W_k` in TWH's notation.
+    pam <- pam(data, num_clusters, diss=TRUE)
+    td = TD(data,pam$clustering, pam$medoids)
+    log(td)
+  }
+}
+
+TD <- function(distancematrix, cluster, medoiden){
+  n <- length(cluster)
+  k <- length(medoiden)
+  D <- rep(0, times=k)
+  nk <- rep(0, times=k)
+  im <- 0
+  for (i in 1:n){
+    for (j in 1:k){
+      if (cluster[i] == j){
+        im = medoiden[j]
+        D[j] = D[j]+distancematrix[i,im]
+        nk[j]=nk[j]+1
+      }
+    }
+  }
+  TD <- 0
+  for (i in 1:k){
+    TD = TD+D[i]
+  }  
+  return(TD)
+}
+
+# For an appropriate reference distribution (in this case, uniform points in the same range as `data`), simulate the mean and standard deviation of the dispersion.
+reference_dispersion = function(data, num_clusters, num_reference_bootstraps) {
+  dis=spDists(data, y = data, longlat = TRUE)
+  dispersions = maply(1:num_reference_bootstraps, function(i) dispersion(generate_uniform_points(data), num_clusters))
+  mean_dispersion = mean(dispersions)
+  stddev_dispersion = sd(dispersions) / sqrt(1 + 1 / num_reference_bootstraps) # the extra factor accounts for simulation error
+  c(mean_dispersion, stddev_dispersion)
+}
+
+# Plot the gaps along with error bars.
+plot_gap_statistic = function(gaps, stddevs, num_clusters) {
+  qplot(num_clusters, gaps, xlab = "Number of clusters", ylab = "GAP statistic value", geom = "line", main = "Estimating the number of clusters via the gap statistic (PAM)") + geom_errorbar(aes(num_clusters, ymin = gaps - stddevs, ymax = gaps + stddevs), size = 0.3, width = 0.2, colour = "darkblue")
+}
+
+gap_PAM=gap_statistic(X, k_min, k_max, B)
+
+
+#FPAM
+# Calculate log(sum_i(within-cluster_i sum of squares around cluster_i mean)).
+dispersion = function(data, num_clusters) {
+  data=spDists(data, y = data, longlat = TRUE)
+  # R's k-means algorithm doesn't work when there is only one cluster.
+  if (num_clusters == 1) {
+    cluster_mean = aaply(data, 2, mean)
+    distances_from_mean = aaply((data - cluster_mean)^2, 1, sum)
+    log(sum(distances_from_mean))
+  } else {	
+    fastpam <- pam(data, num_clusters, diss=TRUE, pamonce = 5) 
+    td = TD(data,fastpam$clustering, fastpam$medoids)
+    log(td)
+  }
+}
+plot_gap_statistic = function(gaps, stddevs, num_clusters) {
+  qplot(num_clusters, gaps, xlab = "Number of clusters", ylab = "GAP statistic value", geom = "line", main = "Estimating the number of clusters via the gap statistic (FPAM)") + geom_errorbar(aes(num_clusters, ymin = gaps - stddevs, ymax = gaps + stddevs), size = 0.3, width = 0.2, colour = "darkblue")
+}
+
+gap_FPAM=gap_statistic(X, k_min, k_max, B)
+
+
+#FKM
+dispersion = function(data, num_clusters) {
+  data=spDists(data, y = data, longlat = TRUE)
+  if (num_clusters == 1) {
+    cluster_mean = aaply(data, 2, mean)
+    distances_from_mean = aaply((data - cluster_mean)^2, 1, sum)
+    log(sum(distances_from_mean))
+  } else {	
+    inkm <- fastkmed(data, ncluster = num_clusters, iterate = 200)
+    td=inkm$minimum_distance
+    log(td)
+  }
+}
+
+plot_gap_statistic = function(gaps, stddevs, num_clusters) {
+  qplot(num_clusters, gaps, xlab = "Number of clusters", ylab = "GAP statistic value", geom = "line", main = "Estimating the number of clusters via the gap statistic (FKM)") + geom_errorbar(aes(num_clusters, ymin = gaps - stddevs, ymax = gaps + stddevs), size = 0.3, width = 0.2, colour = "darkblue")
+}
+
+gap_FKM=gap_statistic(X, k_min, k_max, B)
+
+
+#RKM
+# Calculate log(sum_i(within-cluster_i sum of squares around cluster_i mean)).
+dispersion = function(data, num_clusters) {
+  data=spDists(data, y = data, longlat = TRUE)
+  # R's k-means algorithm doesn't work when there is only one cluster.
+  if (num_clusters == 1) {
+    cluster_mean = aaply(data, 2, mean)
+    distances_from_mean = aaply((data - cluster_mean)^2, 1, sum)
+    log(sum(distances_from_mean))
+  } else {	
+    # Run the k-means algorithm `nstart` times. Each run uses at most `iter.max` iterations.
+    #k = kmeans(data, centers = num_clusters, nstart = 10, iter.max = 50)
+    # Take the sum, over each cluster, of the within-cluster sum of squares around the cluster mean. Then take the log. This is `W_k` in TWH's notation.
+    inkm <- rankkmed(data, ncluster = num_clusters, m=5, iterate = 50)
+    td=inkm$minimum_distance
+    log(td)
+  }
+}
+
+# Plot the gaps along with error bars.
+plot_gap_statistic = function(gaps, stddevs, num_clusters) {
+  qplot(num_clusters, gaps, xlab = "Number of clusters", ylab = "GAP statistic value", geom = "line", main = "Estimating the number of clusters via the gap statistic (RKM)") + geom_errorbar(aes(num_clusters, ymin = gaps - stddevs, ymax = gaps + stddevs), size = 0.3, width = 0.2, colour = "darkblue")
+}
+
+library(plyr)
+library(ggplot2)
+gap_statistic_mod = function(data, min_num_clusters = 1, max_num_clusters = 10, num_reference_bootstraps = 10, repeatitions=1) {
+  num_clusters = min_num_clusters:max_num_clusters
+  num_clust = min_num_clusters:(max_num_clusters-1)
+  num_rep = 1:repeatitions
+  #actual_dispersions = maply(num_clusters, function(n) dispersion(data, n))
+  act_disp = maply(num_rep, function(n)(maply(num_clusters, function(n) dispersion(data, n))))
+  ref_dispersions = maply(num_clusters, function(n) reference_dispersion(data, n, num_reference_bootstraps))
+  mean_ref_dispersions = ref_dispersions[ , 1]
+  stddev_ref_dispersions = ref_dispersions[ , 2]
+  gap=c()
+  for (i in 1:repeatitions) {
+    gap2 = mean_ref_dispersions - act_disp[i,]  
+    gap=cbind(gap,gap2)
+  }
+  ga=c()
+  for (i in num_clust){
+    gaps=gap[i-1,]-gap[i,]+rep(stddev_ref_dispersions[i],repeatitions)
+    ga=cbind(ga,gaps)
+  }
+  list(gaps = gap, gap_stddevs = stddev_ref_dispersions, gap=ga)
+}
+# rep=1000
+# gap_RKM = gap_statistic(data=X, min_num_clusters = 2, max_num_clusters = 20, num_reference_bootstraps = 500, repeatitions = 1000)
+gap_RKM = gap_statistic_mod(X,k_min,k_max,B,rep)
+
+res=c()
+for (i in (1:rep)){
+  r=k_min
+  j=1
+  while (gap_RKM$gap[i,j]<=0){
+      r=r+1
+      j=j+1
+  }
+  res=append(res,r)
+}
+gap_RKM_sum <- as.data.frame(table(res))
+
+
+#IKM
+# alpha 1.1
+dispersion = function(data, num_clusters) {
+  data=spDists(data, y = data, longlat = TRUE)
+  if (num_clusters == 1) {
+    cluster_mean = aaply(data, 2, mean)
+    distances_from_mean = aaply((data - cluster_mean)^2, 1, sum)
+    log(sum(distances_from_mean))
+  } else {	
+    inkm <- inckmed(data, ncluster = num_clusters, alpha = 1.1, iterate = 200)
+    td=inkm$minimum_distance
+    log(td)
+  }
+}
+
+plot_gap_statistic = function(gaps, stddevs, num_clusters) {
+  qplot(num_clusters, gaps, xlab = "Number of clusters", ylab = "GAP statistic value", geom = "line", main = "Estimating the number of clusters via the gap statistic (IKM_1.1)") + geom_errorbar(aes(num_clusters, ymin = gaps - stddevs, ymax = gaps + stddevs), size = 0.3, width = 0.2, colour = "darkblue")
+}
+gap_IKM_1_1=gap_statistic(X, k_min, 10, B) # until the next update you will get an error here, reduce the upper limit and maybe B
+
+
+# alpha 1.5
+dispersion = function(data, num_clusters) {
+  data=spDists(data, y = data, longlat = TRUE)
+  if (num_clusters == 1) {
+    cluster_mean = aaply(data, 2, mean)
+    distances_from_mean = aaply((data - cluster_mean)^2, 1, sum)
+    log(sum(distances_from_mean))
+  } else {	
+    inkm <- inckmed(data, ncluster = num_clusters, alpha = 1.5, iterate = 200)
+    td=inkm$minimum_distance
+    log(td)
+  }
+}
+
+plot_gap_statistic = function(gaps, stddevs, num_clusters) {
+  qplot(num_clusters, gaps, xlab = "Number of clusters", ylab = "GAP statistic value", geom = "line", main = "Estimating the number of clusters via the gap statistic (IKM_1.5)") + geom_errorbar(aes(num_clusters, ymin = gaps - stddevs, ymax = gaps + stddevs), size = 0.3, width = 0.2, colour = "darkblue")
+}
+
+gap_IKM_1_5=gap_statistic(X, k_min, 10, B) # until the next update, you will get an error here, reduce the upper limit and maybe B
+
+
+# Graph 
+plot(k_min:(k_max-1), gap_PAM$gap_s, type = 'l', # Farbe f?r Datenpunkte
+     lwd=2,
+     col="#666666",
+     xlab='Number of clusters', 
+     ylab='GAP', 
+     xlim=c(k_min, k_max),
+     ylim=c(-0.15,0.15))
+axis(1, at=k_range,labels=k_range, las=0)
+lines(x=c(k_min:(k_max-1)),
+      y=gap_FPAM$gap_s,
+      lwd=2,
+      col="#E7298A",
+      lty="twodash")
+lines(x=c(k_min:(k_max-1)),
+      y=gap_FKM$gap_s,
+      lwd=2, 
+      col="#7570B3",
+      lty="dotdash")
+lines(x=c(k_min:9), # change to 19 if you use k=20
+      y=gap_IKM_1_1$gap_s,
+      lwd=2, 
+      col = "#D95F02",
+      lty="8481")
+lines(x=c(k_min:9),  # change to 19 if you use k=20
+      y=gap_IKM_1_5$gap_s,
+      lwd=2,
+      col="#1B9E77",
+      lty="dashed")
+lines(x=c(1:21),
+      y=c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0),
+      lwd=1, 
+      col="black")
+symbols(x=c(gap_PAM$gap_opt+1, gap_FPAM$gap_opt+1, gap_FKM$gap_opt+1, gap_IKM_1_1$gap_opt+1,
+            gap_IKM_1_5$gap_opt+1), 
+        y=c(gap_PAM$gap_s[gap_PAM$gap_opt], gap_FPAM$gap_s[gap_FPAM$gap_opt], 
+            gap_FKM$gap_s[gap_FKM$gap_opt], gap_IKM_1_1$gap_s[gap_IKM_1_1$gap_opt],
+            gap_IKM_1_5$gap_s[gap_IKM_1_5$gap_opt]),
+        circles=rep(1,5), add=T, inches=0.07, lwd=2)
+legend("topright", legend=c("PAM","FPAM","FKM", "IKM_1.1","IKM_1.5"),
+       col=c("#666666", "#E7298A", "#7570B3", "#D95F02", "#1B9E77"), 
+       lty=c("solid","twodash","dotdash", "8481","dashed"), cex=0.8)
+```
+
+
+TSP
+
+Data and Information we need from before
+```{r}
+k = 4 #number of clusters from 2-20 in our case we use 4
+
+# next part could be skipped, by just using the precalculated distancematrix D
+data <- read_excel("rawdataclear.xls", na="NA")
+lat = data$LATITUDE
+lon = data$LONGITUDE
+X = cbind(lon, lat)
+n = as.numeric(length(lon)) # determine number of data points
+D = spDists(X, y = X, longlat = TRUE) #what you use as distance matrix (in this case the previously calculated GCD-matrix)
+
+# cluster the data to get the different clusters:
+fast.res <- fastkmed(D, k, iterate = 200)
+cluster <- as.numeric(fast.res$cluster)
+```
+
+Since we know we have k=4. We need the four distance matrixes for the Clusters
+```{r}
+# to work with the clusters we need to separate the data in the different clusters and get individual distance matrices for the clusters
+C_1 <- list(); C_2 <- list(); C_3 <- list(); C_4 <- list()
+for (i in 1:n){
+  if (cluster[i] == 1){C_1 = append(C_1, i)}
+  if (cluster[i] == 2){C_2 = append(C_2, i)}
+  if (cluster[i] == 3){C_3 = append(C_3, i)} 
+  if (cluster[i] == 4){C_4 = append(C_4, i)} 
+}
+C_1 = as.numeric(C_1); C_2 = as.numeric(C_2); C_3 = as.numeric(C_3); C_4 = as.numeric(C_4)
+# Distance matrixes for the clusters
+D_1 = D[C_1,C_1]
+D_2 = D[C_2,C_2]
+D_3 = D[C_3,C_3]
+D_4 = D[C_4,C_4]
+```
+
+Example solution of TSP for one method (and two-opt improvement) for all four clusters
+```{r}
+# met <- "random"
+met <- "repetitive_nn"
+# met <- "nearest_insertion"
+# met <- "farthest_insertion"
+# met <- "cheapest_insertion"
+# met <- "arbitrary_insertion"
+# met <- "two_opt"
+# met = "concorde"
+D_1=TSP(D_1) # Distance matrix in the right format
+tourC_1 <- solve_TSP(D_1, method = met) # solving the TSP 
+tC_1=as.numeric(tourC_1) # the tour of the TSP with the numeration from the cluster
+D_2=TSP(D_2); tourC_2 <- solve_TSP(D_2, method = met); tC_2=as.numeric(tourC_2)
+D_3=TSP(D_3); tourC_3 <- solve_TSP(D_3, method = met); tC_3=as.numeric(tourC_3)
+D_4=TSP(D_4); tourC_4 <- solve_TSP(D_4, method = met); tC_4=as.numeric(tourC_4)
+
+# to get the tours back with the numbers for the entire cluster
+tour_1=c()  
+for (i in 1:length(tC_1)){tour_1[i]=C_1[tC_1[i]]}
+tour_2=c()
+for (i in 1:length(tC_2)){tour_2[i]=C_2[tC_2[i]]}
+tour_3=c()
+for (i in 1:length(tC_3)){tour_3[i]=C_3[tC_3[i]]}
+tour_4=c()
+for (i in 1:length(tC_4)){tour_4[i]=C_4[tC_4[i]]}
+
+length=tour_length(tourC_1)+tour_length(tourC_2)+tour_length(tourC_3)+tour_length(tourC_4)
+
+# the 2O method used for the previously found tour
+met <- "two_opt"
+
+tour2C_1 <- solve_TSP(D_1, tour= tourC_1, method = met)
+tour2C_2 <- solve_TSP(D_2, tour= tourC_2, method = met)
+tour2C_3 <- solve_TSP(D_3, tour= tourC_3, method = met)
+tour2C_4 <- solve_TSP(D_4, tour= tourC_4, method = met)
+
+tC_1=as.numeric(tour2C_1); tour2O_1=c()
+tC_2=as.numeric(tour2C_2); tour2O_2=c()
+tC_3=as.numeric(tour2C_3); tour2O_3=c()
+tC_4=as.numeric(tour2C_4); tour2O_4=c()
+
+# to get in back with the numbers for the entire cluster 
+for (i in 1:length(tC_1)){tour2O_1[i]=C_1[tC_1[i]]} 
+for (i in 1:length(tC_2)){tour2O_2[i]=C_2[tC_2[i]]}
+for (i in 1:length(tC_3)){tour2O_3[i]=C_3[tC_3[i]]}
+for (i in 1:length(tC_4)){tour2O_4[i]=C_4[tC_4[i]]}
+
+length2=tour_length(tour2C_1)+tour_length(tour2C_2)+tour_length(tour2C_3)+tour_length(tour2C_4)
+
+# for the clusters individually to find the best tour for all individually
+repe = 5000 # how many samples we take
+
+# function to find the shortest tour
+shortest_tour = function(data, method=met, repetitions=5000){
+  D_a=TSP(data) # we do not want to overwrite the distance matrix so we call it D_a
+  lengthmin = Inf
+  tour_leng=c() # to save the tour length of every sample
+  lengthminto = Inf
+  tour_leng_two=c() 
+  for (i in 1:repetitions){
+    tour <- solve_TSP(D_a, method = met)
+    tour_leng=append(tour_leng , tour_length(tour))
+    if (tour_length(tour)<lengthmin){ # if the tour length is the shortest we went to save the actual tour and not only the total length 
+      lengthmin = tour_length(tour)
+      mintour = tour
+    }
+    # same for 2O, Since we are in the 2O case there is no difference
+    tourto <- solve_TSP(D_a, tour = tour, method = "two_opt")
+    tour_leng_two=append(tour_leng_two , tour_length(tourto))
+    if (tour_length(tourto)<lengthminto){
+      lengthminto = tour_length(tourto)
+      mintourto = tourto
+    }
+  }
+  list(mintour=mintour, mintour_2O=mintourto)
+}
+
+# shortest tour for Cluster 1
+# 2O
+met <- "two_opt"
+tour_2O_C_1 = shortest_tour(D_1,met,repe)
+tour_length(tour_2O_C_1$mintour) # shows the length of the shortest found tour
+as.numeric(tour_2O_C_1$mintour) # gives back the shortest tor itself
+
+# NN
+met <- "nn"
+tour_NN_C_1 = shortest_tour(D_1,met,repe)
+tour_length(tour_NN_C_1$mintour) # shows the length of the shortest found tour
+as.numeric(tour_NN_C_1$mintour) # gives back the shortest tour itself
+tour_length(tour_NN_C_1$mintour_2O) # shows the length of the shortest 2O improved tour  
+as.numeric(tour_NN_C_1$mintour_2O) # gives back the shortest tour after being 2O improved
+
+# NNR
+met <- "repetitive_nn"
+tour_NNR_C_1 = shortest_tour(D_1,met,repe)
+
+# NI 
+met <- "nearest_insertion"
+tour_NI_C_1 = shortest_tour(D_1,met,repe)
+
+# FI
+met <- "farthest_insertion"
+tour_FI_C_1 = shortest_tour(D_1,met,repe)
+
+# CI
+met <- "cheapest_insertion"
+tour_CI_C_1 = shortest_tour(D_1,met,repe)
+
+# AI
+met <- "arbitrary_insertion"  
+tour_AI_C_1 = shortest_tour(D_1,met,repe)
+
+# finding the minimal tour over all tours, By compairing all of them
+min_tour_C_1=tour_NNR_C_1$mintour_2O
+if ((tour_length(tour_NN_C_1$mintour_2O))>(tour_length(tour_NNR_C_1$mintour_2O))) {min_tour_C_1=tour_NNR_C_1$mintour_2O} else {min_tour=tour_NN_C_1$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_NI_C_1$mintour_2O))) {min_tour_C_1=tour_NI_C_1$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_AI_C_1$mintour_2O))) {min_tour_C_1=tour_AI_C_1$mintour_2O}
+if ((tour_length(min_tour))> (tour_length(tour_CI_C_1$mintour_2O))) {min_tour_C_1=tour_CI_C_1$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_FI_C_1$mintour_2O))) {min_tour_C_1=tour_FI_C_1$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_2O_C_1$mintour_2O))) {min_tour_C_1=tour_2O_C_1$mintour_2O}
+
+
+# shortest tour for Cluster 2 (Same as for Cluster 1)
+# 2O
+met <- "two_opt"; tour_2O_C_2 = shortest_tour(D_2,met,repe)
+# NN
+met <- "nn"; tour_NN_C_2 = shortest_tour(D_2,met,repe)
+# NNR
+met <- "repetitive_nn"; tour_NNR_C_2 = shortest_tour(D_2,met,repe)
+# NI 
+met <- "nearest_insertion"; tour_NI_C_2 = shortest_tour(D_2,met,repe)
+# FI
+met <- "farthest_insertion"; tour_FI_C_2 = shortest_tour(D_2,met,repe)
+# CI
+met <- "cheapest_insertion"; tour_CI_C_2 = shortest_tour(D_2,met,repe)
+# AI
+met <- "arbitrary_insertion"; tour_AI_C_2 = shortest_tour(D_2,met,repe)
+# finding the minimal tour over all tours, by compairing all of them
+min_tour_C_2=tour_NNR_C_2$mintour_2O
+if ((tour_length(tour_NN_C_2$mintour_2O))>(tour_length(tour_NNR_C_2$mintour_2O))) {min_tour_C_2=tour_NNR_C_2$mintour_2O} else {min_tour=tour_NN_C_2$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_NI_C_2$mintour_2O))) {min_tour_C_2=tour_NI_C_2$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_AI_C_2$mintour_2O))) {min_tour_C_2=tour_AI_C_2$mintour_2O}
+if ((tour_length(min_tour))> (tour_length(tour_CI_C_2$mintour_2O))) {min_tour_C_2=tour_CI_C_2$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_FI_C_2$mintour_2O))) {min_tour_C_2=tour_FI_C_2$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_2O_C_2$mintour_2O))) {min_tour_C_2=tour_2O_C_2$mintour_2O}
+
+
+# shortest tour for Cluster 3 (Same as for Cluster 1)
+# 2O
+met <- "two_opt"; tour_2O_C_3 = shortest_tour(D_3,met,repe)
+# NN
+met <- "nn"; tour_NN_C_3 = shortest_tour(D_3,met,repe)
+# NNR
+met <- "repetitive_nn"; tour_NNR_C_3 = shortest_tour(D_3,met,repe)
+# NI 
+met <- "nearest_insertion"; tour_NI_C_3 = shortest_tour(D_3,met,repe)
+# FI
+met <- "farthest_insertion"; tour_FI_C_3 = shortest_tour(D_3,met,repe)
+# CI
+met <- "cheapest_insertion"; tour_CI_C_3 = shortest_tour(D_3,met,repe)
+# AI
+met <- "arbitrary_insertion"; tour_AI_C_3 = shortest_tour(D_3,met,repe)
+# finding the minimal tour over all tours, by compairing all of them
+min_tour_C_3=tour_NNR_C_3$mintour_2O
+if ((tour_length(tour_NN_C_3$mintour_2O))>(tour_length(tour_NNR_C_3$mintour_2O))) {min_tour_C_3=tour_NNR_C_3$mintour_2O} else {min_tour=tour_NN_C_3$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_NI_C_3$mintour_2O))) {min_tour_C_3=tour_NI_C_3$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_AI_C_3$mintour_2O))) {min_tour_C_3=tour_AI_C_3$mintour_2O}
+if ((tour_length(min_tour))> (tour_length(tour_CI_C_3$mintour_2O))) {min_tour_C_3=tour_CI_C_3$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_FI_C_3$mintour_2O))) {min_tour_C_3=tour_FI_C_3$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_2O_C_3$mintour_2O))) {min_tour_C_3=tour_2O_C_3$mintour_2O}
+
+# shortest tour for Cluster 4 (Same as for Cluster 1)
+# 2O
+met <- "two_opt"; tour_2O_C_4 = shortest_tour(D_4,met,repe)
+# NN
+met <- "nn"; tour_NN_C_4 = shortest_tour(D_4,met,repe)
+# NNR
+met <- "repetitive_nn"; tour_NNR_C_4 = shortest_tour(D_4,met,repe)
+# NI 
+met <- "nearest_insertion"; tour_NI_C_4 = shortest_tour(D_4,met,repe)
+# FI
+met <- "farthest_insertion"; tour_FI_C_4 = shortest_tour(D_4,met,repe)
+# CI
+met <- "cheapest_insertion"; tour_CI_C_4 = shortest_tour(D_4,met,repe)
+# AI
+met <- "arbitrary_insertion"; tour_AI_C_4 = shortest_tour(D_4,met,repe)
+# finding the minimal tour over all tours, by compairing all of them
+min_tour_C_4=tour_NNR_C_4$mintour_2O
+if ((tour_length(tour_NN_C_4$mintour_2O))>(tour_length(tour_NNR_C_4$mintour_2O))) {min_tour_C_4=tour_NNR_C_4$mintour_2O} else {min_tour=tour_NN_C_4$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_NI_C_4$mintour_2O))) {min_tour_C_4=tour_NI_C_4$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_AI_C_4$mintour_2O))) {min_tour_C_4=tour_AI_C_4$mintour_2O}
+if ((tour_length(min_tour))> (tour_length(tour_CI_C_4$mintour_2O))) {min_tour_C_4=tour_CI_C_4$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_FI_C_4$mintour_2O))) {min_tour_C_4=tour_FI_C_4$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_2O_C_4$mintour_2O))) {min_tour_C_4=tour_2O_C_4$mintour_2O}
+```
+
+Graphical version
+of best Clustering
+```{r}
+tC_1=as.numeric(min_tour_C_1) # the tour of the TSP with the numberation from the cluster
+tC_2=as.numeric(min_tour_C_2)
+tC_3=as.numeric(min_tour_C_3)
+tC_4=as.numeric(min_tour_C_4)
+
+# to get the tours back with the numbers for the entire cluster
+tour_1=c(); tour_2=c(); tour_3=c(); tour_4=c()
+for (i in 1:length(tC_1)){tour_1[i]=C_1[tC_1[i]]}
+for (i in 1:length(tC_2)){tour_2[i]=C_2[tC_2[i]]}
+for (i in 1:length(tC_3)){tour_3[i]=C_3[tC_3[i]]}
+for (i in 1:length(tC_4)){tour_4[i]=C_4[tC_4[i]]}
+
+###########################################################################
+t_1=c()
+for (i in 1:length(tourC_1)){
+   if (is.na(tourC_1[i])){
+     } else {t_1=append(t_1, C_1[tourC_1[i]])}
+}
+t_2=c()
+for (i in 1:length(tourC_2)){
+   if (is.na(tourC_2[i])){
+     } else {t_2=append(t_2, C_2[tourC_2[i]])}
+}
+t_3=c()
+for (i in 1:length(tourC_3)){
+   if (is.na(tourC_3[i])){
+     } else {t_3=append(t_3, C_3[tourC_3[i]])}
+}
+t_4=c()
+for (i in 1:length(tourC_4)){
+   if (is.na(tourC_4[i])){
+     } else {t_4=append(t_4, C_4[tourC_4[i]])}
+}
+
+xG=c(); yG=c();xL=c(); yL=c(); xJ=c(); yJ=c(); xK=c(); yK=c()
+for (i in t_1){yG=append(yG,data$LATITUDE[i]);xG=append(xG,data$LONGITUDE[i])}
+for (i in t_2){yL=append(yL,data$LATITUDE[i]);xL=append(xL,data$LONGITUDE[i])}
+for (i in t_3){yK=append(yK,data$LATITUDE[i]);xK=append(xK,data$LONGITUDE[i])}
+for (i in t_4){yJ=append(yJ,data$LATITUDE[i]);xJ=append(xJ,data$LONGITUDE[i])}
+yG=append(yG,yG[1]);xG=append(xG,xG[1])
+yL=append(yL,yL[1]);xL=append(xL,xL[1])
+yK=append(yK,yK[1]);xK=append(xK,xK[1])
+yJ=append(yJ,yJ[1]);xJ=append(xJ,xJ[1])
+library(leaflet.extras)
+
+dg=as.data.frame(cbind(xG,yG))
+dk=as.data.frame(cbind(xK,yK))
+dl=as.data.frame(cbind(xL,yL))
+dj=as.data.frame(cbind(xJ,yJ))
+m <-leaflet(data) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addGeodesicPolylines(lng = ~xG, lat = ~yG, weight = 2, color = "red",
+                       steps = 50, opacity = 1) %>%
+  addCircleMarkers(dg, lat = ~yG,lng = ~xG, radius = 2, stroke = FALSE,
+                   fillColor = "black", fillOpacity = 1)%>%
+  addGeodesicPolylines(lng = ~xK, lat = ~yK, weight = 2, color = "green",
+                       steps = 50, opacity = 1) %>%
+  addCircleMarkers(dk, lat = ~yK,lng = ~xK, radius = 2, stroke = FALSE,
+                   fillColor = "black", fillOpacity = 1)%>%
+  addGeodesicPolylines(lng = ~xL, lat = ~yL, weight = 2, color = "blue",
+                       steps = 50, opacity = 1) %>%
+  addCircleMarkers(dl, lat = ~yL,lng = ~xL, radius = 2, stroke = FALSE,
+                   fillColor = "black", fillOpacity = 1)%>%
+  addGeodesicPolylines(lng = ~xJ, lat = ~yJ, weight = 2, color = "yellow",
+                       steps = 50, opacity = 1) %>%
+  addCircleMarkers(dj, lat = ~yJ,lng = ~xJ, radius = 2, stroke = FALSE,
+                   fillColor = "black", fillOpacity = 1)
+m
+```
+
+
+
+
+
+To take a sample of 5000 of them and get the best tour here for the not clustered version
+```{r}
+#without clustering
+
+repe = 5000 # how many samples we take
+
+# function to find the shortest tour
+shortest_tour = function(data, method=met, repetitions=5000){
+  D_a=TSP(data) # we do not want to overwrite the distance matrix so we call it D_a
+  lengthmin = Inf
+  tour_leng=c() # to save the tour length of every sample
+  lengthminto = Inf
+  tour_leng_two=c() 
+  for (i in 1:repetitions){
+    tour <- solve_TSP(D_a, method = met)
+    tour_leng=append(tour_leng , tour_length(tour))
+    if (tour_length(tour)<lengthmin){ # if the tour length is the shortest we went to save the actual tour and not only the total length 
+      lengthmin = tour_length(tour)
+      mintour = tour
+    }
+    # same for 2O, Since we are in the 2O case there is no difference
+    tourto <- solve_TSP(D_a, tour = tour, method = "two_opt")
+    tour_leng_two=append(tour_leng_two , tour_length(tourto))
+    if (tour_length(tourto)<lengthminto){
+      lengthminto = tour_length(tourto)
+      mintourto = tourto
+    }
+  }
+  list(mintour=mintour, mintour_2O=mintourto)
+}
+
+
+# 2O
+met <- "two_opt"
+tour_2O = shortest_tour(D,met,repe)
+tour_length(tour_2O$mintour) # shows the length of the shortest found tour
+as.numeric(tour_2O$mintour) # gives back the shortest tor itself
+
+# NN
+met <- "nn"
+tour_NN = shortest_tour(D,met,repe)
+tour_length(tour_NN$mintour) # shows the length of the shortest found tour
+as.numeric(tour_NN$mintour) # gives back the shortest tour itself
+tour_length(tour_NN$mintour_2O) # shows the length of the shortest 2O improved tour  
+as.numeric(tour_NN$mintour_2O) # gives back the shortest tour after being 2O improved
+
+# NNR
+met <- "repetitive_nn"
+tour_NNR = shortest_tour(D,met,repe)
+
+# NI 
+met <- "nearest_insertion"
+tour_NI = shortest_tour(D,met,repe)
+
+# FI
+met <- "farthest_insertion"
+tour_FI = shortest_tour(D,met,repe)
+
+# CI
+met <- "cheapest_insertion"
+tour_CI = shortest_tour(D,met,repe)
+
+# AI
+met <- "arbitrary_insertion"  
+tour_AI = shortest_tour(D,met,repe)
+
+
+#Graphic of over all shortest tour without clustering
+
+# finding the minimal tour over all tours, By compairing all of them
+min_tour=tour_NNR$mintour_2O
+if ((tour_length(tour_NN$mintour_2O))>(tour_length(tour_NNR$mintour_2O))) {min_tour=tour_NNR$mintour_2O} else {min_tour=tour_NN$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_NI$mintour_2O))) {min_tour=tour_NI$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_AI$mintour_2O))) {min_tour=tour_AI$mintour_2O}
+if ((tour_length(min_tour))> (tour_length(tour_CI$mintour_2O))) {min_tour=tour_CI$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_FI$mintour_2O))) {min_tour=tour_FI$mintour_2O}
+if ((tour_length(min_tour)) > (tour_length(tour_2O$mintour_2O))) {min_tour=tour_2O$mintour_2O}
+
+
+ylab=c(min(lat),max(lat)) # for the frame
+xlab=c(min(lon),max(lon))
+#without clustering
+
+
+mt=as.numeric(min_tour)
+x=c(); y=c()
+for (i in mt){y=append(y,data$LATITUDE[i]);x=append(x,data$LONGITUDE[i])}
+y=append(y,y[1]); x=append(x,x[1])
+d=as.data.frame(cbind(x,y))
+m <-leaflet(data) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addGeodesicPolylines(lng = ~x, lat = ~y, weight = 2, color = "gray",
+                       steps = 50, opacity = 1) %>%
+  addCircleMarkers(X, lat = ~y,lng = ~x, radius = 2, stroke = FALSE,
+                   fillColor = "black", fillOpacity = 1)
+m
+```
