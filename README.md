@@ -36,7 +36,7 @@ The next two blocks are ASM in lines 183-293 and GSM in 298-594.
 We start with the TSP in line 600, we give the number of clusters manually in our case 4. 
 After splitting our data into the found clusters (617-632), we show one example for the clustering before we take 5000 runs with every method, find the overall minimum of them, and show the result on the map (635-829). In the last block, we find the shortest tour with our heuristics for the unclustered version of our data points.
 
-The other R file is to get the graphics of the different clustering methods.
+With the other R file, 'Graphs_Clustering' we get the graphics of the different clustering methods.
 
 ## Screenshots
 For easier understanding we work with graphics:
