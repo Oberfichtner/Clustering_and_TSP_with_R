@@ -1,6 +1,6 @@
 # Clustering_and_TSP_with_R
 ## Application of a Traveling Salesman Problem with Independent Clusters in R
-This project is based on the paper **An Application of a Traveling Salesman Problem with Independent Clusters for Cash-Collection Routing** by L. Oberfichtner, B. Singh, and S. Ivliev.
+This project is based on the paper Heuristics for a Cash-Collection Routing Problem with a Cluster-First Route-Second Approach available at https://doi.org/10.1007/s10479-022-04883-1.
 As the title indicates we have a data set of geographical positions given, and we split it into different clusters and find independent Traveling Salesman Tours for each one.
 In this project, we take a look at pre-implemented heuristics for clustering and the Traveling Salesman Problem (TSP). We decide on the number of clusters based on three different determining methods, which are coded, modified, or pre-existing.
 In more detail:
